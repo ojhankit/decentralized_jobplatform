@@ -8,6 +8,7 @@ contract UserManager {
         3. role // Freelancer or Employer 
     */
     struct User {
+        //uint user_id;
         address wallet;
         string profile_url;
         string role;

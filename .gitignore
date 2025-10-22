@@ -18,3 +18,11 @@
 
 # Hardhat coverage reports
 /coverage
+
+
+# Contracts
+contracts/Counter.sol
+contracts/Counter.t.sol
+
+# tests
+test/Counter.ts
