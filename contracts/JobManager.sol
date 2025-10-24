@@ -14,7 +14,7 @@ interface IUserManager{
 
 // Escrow interface
 interface IEscrow {
-    function deposit(uint job_id) external payable;
+    function deposit(uint job_id, address client) external payable;  // ✅ Add client parameter
     function releasePayment(uint job_id, address payable freelancer) external;
     function refund(uint job_id) external;
 }
@@ -54,6 +54,7 @@ contract JobManager {
 
     IUserManager public userManager;
     IEscrow public escrow;
+    address public owner;  // ✅ ADD THIS
 
     // event
     event JobCreated(uint indexed job_id, address indexed employer, string job_description);
@@ -67,6 +68,14 @@ contract JobManager {
         require(_userManager != address(0), "Invalid UserManager address");
         require(_escrow != address(0), "Invalid Escrow address");
         userManager = IUserManager(_userManager);
+        escrow = IEscrow(_escrow);
+        owner = msg.sender;  // ✅ ADD THIS
+    }
+
+    // ✅ ADD THIS FUNCTION after the constructor
+    function setEscrow(address _escrow) external {
+        require(msg.sender == owner, "Only owner can set escrow");
+        require(_escrow != address(0), "Invalid escrow address");
         escrow = IEscrow(_escrow);
     }
 
@@ -93,10 +102,10 @@ contract JobManager {
         require(msg.value > 0, "Must send funds");
 
         // forward funds to escrow
+        // ✅ NEW CODE - pass the employer address
         (bool success, ) = address(escrow).call{value: msg.value}(
-            abi.encodeWithSignature("deposit(uint256)", _job_id)
-        );
-
+            abi.encodeWithSignature("deposit(uint256,address)", _job_id, msg.sender)
+    );
         require(success, "Escrow deposit failed");
     }
 
