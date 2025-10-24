@@ -25,16 +25,16 @@ contract Escrow {
     }
 
     // methods
-    function deposit(uint job_id) external payable {
-        require(msg.value > 0, "Deposit must be greater than 0");
-        require(job_funds[job_id] == 0, "already deposited");
-        require(!refunded[job_id] && !released[job_id], "Job already processed");
+    function deposit(uint job_id, address client) external payable {
+    require(msg.value > 0, "Deposit must be greater than 0");
+    require(job_funds[job_id] == 0, "already deposited");
+    require(!refunded[job_id] && !released[job_id], "Job already processed");
 
-        job_funds[job_id] = msg.value;
-        job_client[job_id] = msg.sender;
+    job_funds[job_id] = msg.value;
+    job_client[job_id] = client;  // ✅ Use the passed client address
 
-        emit Deposited(job_id, msg.sender, msg.value);
-    }
+    emit Deposited(job_id, client, msg.value);
+}
 
     // called by jobmanager when job is closed / completed
     function releasePayment(uint job_id, address payable freelancer) external onlyJobManager{
@@ -53,7 +53,7 @@ contract Escrow {
     }
 
     // refund client if job is cancelled
-    function refundClient(uint job_id) external onlyJobManager {
+    function refund(uint job_id) external onlyJobManager {
         require(!refunded[job_id], "Already refunded");
         require(!released[job_id], "Already released");
         require(job_funds[job_id] > 0, "No funds for this job");
