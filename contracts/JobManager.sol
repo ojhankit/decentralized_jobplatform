@@ -1,40 +1,48 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-// UserManager interface
-interface IUserManager{
-    struct User{
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+/// ---------------------------------------------------------------------------
+/// USER MANAGER INTERFACE (UPDATED FOR DID + CREDENTIALS)
+/// ---------------------------------------------------------------------------
+interface IUserManager {
+    struct User {
         address wallet;
         string profile_url;
         string role;
+        string did;
+        bool did_verified;
     }
 
     function getUser(address _user) external view returns (User memory);
+
+    function hasValidCredential(address _user, string memory _type)
+        external
+        view
+        returns (bool);
 }
 
-// Escrow interface
+/// ---------------------------------------------------------------------------
+/// ESCROW INTERFACE
+/// ---------------------------------------------------------------------------
 interface IEscrow {
-    function deposit(uint job_id, address client) external payable;  // ✅ Add client parameter
+    function deposit(uint job_id, address client) external payable;
     function releasePayment(uint job_id, address payable freelancer) external;
     function refund(uint job_id) external;
 }
 
-
-contract JobManager {
-    /* job struct will require 
-        1. jobid
-        2. job owner
-        3. job worker
-        4. posted date
-        5. status // taken or not taken or closed
-        6. job description hash
-    */
+/// ---------------------------------------------------------------------------
+/// JOB MANAGER CONTRACT
+/// ---------------------------------------------------------------------------
+contract JobManager is ReentrancyGuard {
     enum JobStatus {
-        Open, // Open to accept proposals
-        Taken, // freelancer alloted
-        Completed, // freelancer marked work done still waiting for employer approval 
-        Closed, // employer verified the work
-        Cancelled // Cancelled by employer
+        Open,
+        Taken,
+        Completed,
+        Closed,
+        Cancelled,
+        Disputed
     }
 
     struct Job {
@@ -44,109 +52,134 @@ contract JobManager {
         uint256 created_at;
         string job_description;
         JobStatus status;
+        uint256 payment_amount;
     }
 
-    // state vars
+    // ----------------------------------------------------------------------------------------
+
     mapping(address => uint[]) public employer_jobs;
     mapping(address => uint[]) public freelancer_jobs;
     mapping(uint => Job) public jobs;
+
     uint32 public job_count;
 
     IUserManager public userManager;
     IEscrow public escrow;
-    address public owner;  // ✅ ADD THIS
+    address public owner;
+    address public daoAddress;
 
-    // event
-    event JobCreated(uint indexed job_id, address indexed employer, string job_description);
+    // ----------------------------------------------------------------------------------------
+
+    event JobCreated(uint indexed job_id, address indexed employer, string job_description, uint256 amount);
     event JobAssigned(uint indexed job_id, address indexed worker);
     event JobCompleted(uint indexed job_id);
     event JobClosed(uint indexed job_id);
     event JobCancelled(uint indexed job_id);
+    event DisputeInitiated(uint indexed job_id, address indexed initiator);
 
-    // constructor to set UserManager contract
+    // ----------------------------------------------------------------------------------------
+
     constructor(address _userManager, address _escrow) {
         require(_userManager != address(0), "Invalid UserManager address");
         require(_escrow != address(0), "Invalid Escrow address");
+
         userManager = IUserManager(_userManager);
         escrow = IEscrow(_escrow);
-        owner = msg.sender;  // ✅ ADD THIS
+        owner = msg.sender;
     }
 
-    // ✅ ADD THIS FUNCTION after the constructor
+    // ----------------------------------------------------------------------------------------
+    // SETTERS
+    // ----------------------------------------------------------------------------------------
+
     function setEscrow(address _escrow) external {
-        require(msg.sender == owner, "Only owner can set escrow");
-        require(_escrow != address(0), "Invalid escrow address");
+        require(msg.sender == owner, "Only owner");
+        require(_escrow != address(0), "Invalid escrow");
         escrow = IEscrow(_escrow);
     }
 
-    // methods
-    /*
-        1. createJob
-        2. assignJob
-        3. markJobComplete
-        4. closeJob
-        5. cancelJob
-        6. getJobs
-        7. getEmployerJob
-        8. getFreelancerJob
-        9. depositToEscrow <new>
-    */
-
-    // deposit to escrow when job is created
-    function depositToEscrow(uint _job_id) external payable{
-        Job storage job = jobs[_job_id];
-
-        // only job owner can deposit
-        require(job.job_owner == msg.sender, "Not job owner");
-        require(job.status == JobStatus.Open, "Job not open");
-        require(msg.value > 0, "Must send funds");
-
-        // forward funds to escrow
-        // ✅ NEW CODE - pass the employer address
-        (bool success, ) = address(escrow).call{value: msg.value}(
-            abi.encodeWithSignature("deposit(uint256,address)", _job_id, msg.sender)
-    );
-        require(success, "Escrow deposit failed");
+    function setDAO(address _dao) external {
+        require(msg.sender == owner, "Only owner");
+        require(_dao != address(0), "Invalid DAO");
+        daoAddress = _dao;
     }
 
+    // ----------------------------------------------------------------------------------------
+    // JOB CREATION
+    // ----------------------------------------------------------------------------------------
+
     function createJob(string memory _job_description) public {
-        // check caller is a registered employer
         IUserManager.User memory user = userManager.getUser(msg.sender);
+
         require(user.wallet != address(0), "User not registered");
+        require(user.did_verified, "Employer DID not verified");
+
         require(
             keccak256(bytes(user.role)) == keccak256(bytes("Employer")),
             "Only employers can create jobs"
         );
 
         job_count += 1;
+
         jobs[job_count] = Job({
             job_id: job_count,
             job_owner: msg.sender,
             job_worker: address(0),
             created_at: block.timestamp,
             job_description: _job_description,
-            status: JobStatus.Open
+            status: JobStatus.Open,
+            payment_amount: 0
         });
 
         employer_jobs[msg.sender].push(job_count);
 
-        emit JobCreated(job_count, msg.sender, _job_description);
+        emit JobCreated(job_count, msg.sender, _job_description, 0);
     }
+
+    // ----------------------------------------------------------------------------------------
+    // ESCROW DEPOSIT
+    // ----------------------------------------------------------------------------------------
+
+    function depositToEscrow(uint _job_id) external payable nonReentrant {
+        Job storage job = jobs[_job_id];
+
+        require(job.job_owner == msg.sender, "Not job owner");
+        require(job.status == JobStatus.Open, "Job not open");
+        require(msg.value > 0, "Funds required");
+        require(job.payment_amount == 0, "Already funded");
+
+        job.payment_amount = msg.value;
+
+        (bool success, ) = address(escrow).call{value: msg.value}(
+            abi.encodeWithSignature("deposit(uint256,address)", _job_id, msg.sender)
+        );
+
+        require(success, "Escrow deposit failed");
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // ASSIGN JOB
+    // ----------------------------------------------------------------------------------------
 
     function assignJob(uint _job_id, address _worker) public {
         Job storage job = jobs[_job_id];
 
-        // only job owner can assign
         require(job.job_owner == msg.sender, "Not job owner");
         require(job.status == JobStatus.Open, "Job not open");
+        require(job.payment_amount > 0, "Escrow not funded");
 
-        // check worker is registered freelancer
         IUserManager.User memory workerUser = userManager.getUser(_worker);
+
         require(workerUser.wallet != address(0), "Worker not registered");
+        require(workerUser.did_verified, "Worker DID not verified");
+
         require(
             keccak256(bytes(workerUser.role)) == keccak256(bytes("Freelancer")),
-            "Only freelancers can be assigned"
+            "Worker is not a freelancer"
         );
+
+        // OPTIONAL: enforce skill credential
+        // require(userManager.hasValidCredential(_worker, "SkillCertification"), "Missing skill credential");
 
         job.job_worker = _worker;
         job.status = JobStatus.Taken;
@@ -156,52 +189,121 @@ contract JobManager {
         emit JobAssigned(_job_id, _worker);
     }
 
+    // ----------------------------------------------------------------------------------------
+    // COMPLETE A JOB
+    // ----------------------------------------------------------------------------------------
+
     function markJobComplete(uint _job_id) public {
         Job storage job = jobs[_job_id];
 
-        // only assigned freelancer can mark complete
         require(job.job_worker == msg.sender, "Not assigned worker");
-
-        IUserManager.User memory user = userManager.getUser(msg.sender);
-        require(
-            keccak256(bytes(user.role)) == keccak256(bytes("Freelancer")),
-            "Only freelancer can mark job complete"
-        );
-
-        require(job.status == JobStatus.Taken, "Job not in Taken status");
+        require(job.status == JobStatus.Taken, "Not taken");
 
         job.status = JobStatus.Completed;
 
         emit JobCompleted(_job_id);
     }
 
-    function closeJob(uint _job_id) public {
+    // ----------------------------------------------------------------------------------------
+    // CLOSE JOB AFTER COMPLETION
+    // ----------------------------------------------------------------------------------------
+
+    function closeJob(uint _job_id) public nonReentrant {
         Job storage job = jobs[_job_id];
 
-        // only job owner can close
         require(job.job_owner == msg.sender, "Not job owner");
         require(job.status == JobStatus.Completed, "Job not completed");
 
         job.status = JobStatus.Closed;
 
-        // after status is closed, release payment from escrow to freelancer
         escrow.releasePayment(_job_id, payable(job.job_worker));
 
         emit JobClosed(_job_id);
     }
 
-    function cancelJob(uint _job_id) public {
+    // ----------------------------------------------------------------------------------------
+    // CANCEL JOB
+    // ----------------------------------------------------------------------------------------
+
+    function cancelJob(uint _job_id) public nonReentrant {
         Job storage job = jobs[_job_id];
 
-        // only job owner can cancel
         require(job.job_owner == msg.sender, "Not job owner");
-        require(job.status == JobStatus.Open, "Job not open");
+        require(job.status == JobStatus.Open, "Cannot cancel");
 
         job.status = JobStatus.Cancelled;
 
-        // after status is cancelled, refund payment from escrow to employer
-        escrow.refund(_job_id);
+        if (job.payment_amount > 0) {
+            escrow.refund(_job_id);
+        }
+
         emit JobCancelled(_job_id);
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // DISPUTES
+    // ----------------------------------------------------------------------------------------
+
+    function initiateDispute(uint _job_id) external {
+        Job storage job = jobs[_job_id];
+
+        require(
+            msg.sender == job.job_owner || msg.sender == job.job_worker,
+            "Not allowed"
+        );
+
+        require(
+            job.status == JobStatus.Taken || job.status == JobStatus.Completed,
+            "Invalid dispute status"
+        );
+
+        job.status = JobStatus.Disputed;
+
+        emit DisputeInitiated(_job_id, msg.sender);
+    }
+
+    function resolveDispute(uint _job_id, bool favorFreelancer) external {
+        require(msg.sender == daoAddress, "Only DAO");
+
+        Job storage job = jobs[_job_id];
+
+        require(job.status == JobStatus.Disputed, "Not disputed");
+
+        job.status = JobStatus.Closed;
+
+        if (favorFreelancer) {
+            escrow.releasePayment(_job_id, payable(job.job_worker));
+        } else {
+            escrow.refund(_job_id);
+        }
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // VIEW FUNCTIONS
+    // ----------------------------------------------------------------------------------------
+
+    function getJob(uint jobId)
+        external
+        view
+        returns (
+            uint32 job_id,
+            address job_owner,
+            address job_worker,
+            uint256 created_at,
+            string memory job_description,
+            uint8 status
+        )
+    {
+        Job memory job = jobs[jobId];
+
+        return (
+            job.job_id,
+            job.job_owner,
+            job.job_worker,
+            job.created_at,
+            job.job_description,
+            uint8(job.status)
+        );
     }
 
     function getEmployerJobs(address _employer) public view returns (uint[] memory) {
@@ -211,5 +313,4 @@ contract JobManager {
     function getFreelancerJobs(address _freelancer) public view returns (uint[] memory) {
         return freelancer_jobs[_freelancer];
     }
-
 }
