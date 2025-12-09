@@ -9,7 +9,7 @@ contract UserManager {
     
     struct User {
         address wallet;
-        string profile_url;
+        string profile_url; // hash
         string role;
         string did;  // ✅ NEW: Decentralized Identity identifier
         bool did_verified;  // ✅ NEW: Flag for verified DID

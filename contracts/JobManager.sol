@@ -9,7 +9,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 interface IUserManager {
     struct User {
         address wallet;
-        string profile_url;
+        string profile_url; 
         string role;
         string did;
         bool did_verified;
@@ -50,7 +50,7 @@ contract JobManager is ReentrancyGuard {
         address job_owner;
         address job_worker;
         uint256 created_at;
-        string job_description;
+        string job_description; 
         JobStatus status;
         uint256 payment_amount;
     }

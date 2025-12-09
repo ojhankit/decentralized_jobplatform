@@ -2,9 +2,9 @@
 pragma solidity ^0.8.28;
 
 interface IFLXToken {
-    // If your token uses standard names, change these to balanceOf / totalSupply or adapt token contract.
-    function balanceOfFLX(address account) external view returns (uint256);
-    function totalSupplyFLX() external view returns (uint256);
+    // Fixed: Use standard ERC20 function names
+    function balanceOf(address account) external view returns (uint256);
+    function totalSupply() external view returns (uint256);
 }
 
 interface IJobManager {
@@ -46,7 +46,7 @@ contract Dao {
         uint downvote;
         bool executed;
         ProposalStatus status;
-        uint job_id;  // for dispute proposals
+        uint job_id;
         bool favor_freelancer;
     }
 
@@ -61,7 +61,7 @@ contract Dao {
     mapping(address => bool) public members;
 
     uint public constant VOTING_PERIOD = 3 days;
-    uint public quorum_percent = 10; // percent of total token supply required for quorum
+    uint public quorum_percent = 10;
 
     event MemberJoined(address member);
     event MemberLeft(address member);
@@ -99,30 +99,22 @@ contract Dao {
         owner = msg.sender;
     }
 
-    /**
-     * @notice Become a DAO member if you hold FLX tokens
-     */
     function joinDAO() external {
         require(!members[msg.sender], "Already member");
 
-        uint256 bal = token.balanceOfFLX(msg.sender);
+        // Fixed: Use standard balanceOf
+        uint256 bal = token.balanceOf(msg.sender);
         require(bal > 0, "Need FLX tokens to join");
 
         members[msg.sender] = true;
         emit MemberJoined(msg.sender);
     }
 
-    /**
-     * @notice Leave DAO (removes voting rights in DAO mapping)
-     */
     function leaveDAO() external onlyMember {
         members[msg.sender] = false;
         emit MemberLeft(msg.sender);
     }
 
-    /**
-     * @notice Create a general proposal
-     */
     function createProposal(string memory _desc, ProposalType _type) external onlyMember {
         proposal_count += 1;
         proposals[proposal_count] = Proposal({
@@ -142,20 +134,13 @@ contract Dao {
         emit ProposalCreated(proposal_count, msg.sender, _desc);
     }
 
-    /**
-     * @notice Create a dispute resolution proposal for a disputed job
-     * @dev jobManager.getJob returns status as uint8. JobManager's Disputed status should match the number used here.
-     */
     function createDisputeProposal(
         uint _job_id,
         string memory _desc,
         bool _favorFreelancer
     ) external onlyMember {
-        // Verify job exists and is disputed (magic number corresponds to JobStatus.Disputed in JobManager)
         (uint32 job_id, , , , , uint8 status) = jobManager.getJob(_job_id);
         require(job_id > 0, "Job doesn't exist");
-
-        // JobStatus.Disputed was enum value 5 in your JobManager; keep this in sync with JobManager.
         require(status == 5, "Job not in disputed status");
 
         proposal_count += 1;
@@ -177,13 +162,11 @@ contract Dao {
         emit ProposalCreated(proposal_count, msg.sender, _desc);
     }
 
-    /**
-     * @notice Cast a vote. Voting weight = token.balanceOfFLX(voter)
-     */
     function vote(uint _id, bool support) external onlyMember onlyActive(_id) {
         require(!has_voted[_id][msg.sender], "Already voted");
 
-        uint weight = token.balanceOfFLX(msg.sender);
+        // Fixed: Use standard balanceOf
+        uint weight = token.balanceOf(msg.sender);
         require(weight > 0, "No voting power");
 
         Proposal storage p = proposals[_id];
@@ -194,16 +177,14 @@ contract Dao {
         emit Voted(_id, msg.sender, support, weight);
     }
 
-    /**
-     * @notice Execute a proposal after voting period ends and quorum is met.
-     */
     function executeProposal(uint _id) external onlyMember {
         Proposal storage p = proposals[_id];
         require(block.timestamp > p.vote_end, "Voting still ongoing");
         require(!p.executed, "Already executed");
 
         uint totalVotes = p.upvote + p.downvote;
-        uint totalSupply = token.totalSupplyFLX();
+        // Fixed: Use standard totalSupply
+        uint totalSupply = token.totalSupply();
         require(totalSupply > 0, "Token total supply is zero");
 
         uint quorum = (totalSupply * quorum_percent) / 100;
@@ -213,7 +194,6 @@ contract Dao {
         p.executed = true;
         p.status = success ? ProposalStatus.Executed : ProposalStatus.Rejected;
 
-        // If passed and it's a dispute resolution, execute resolution on JobManager
         if (success && p.proposal_type == ProposalType.DisputeResolution) {
             jobManager.resolveDispute(p.job_id, p.favor_freelancer);
             emit DisputeResolved(p.job_id, p.favor_freelancer);
@@ -222,9 +202,6 @@ contract Dao {
         emit ProposalExecuted(_id, success);
     }
 
-    /**
-     * @notice Read proposal details
-     */
     function getProposal(uint _id) external view returns (
         uint proposal_id,
         address proposer,
@@ -256,9 +233,6 @@ contract Dao {
         );
     }
 
-    /**
-     * @notice Owner can change quorum percent (e.g., 10 for 10%)
-     */
     function setQuorumPercent(uint _newQuorum) external onlyOwner {
         require(_newQuorum > 0 && _newQuorum <= 100, "Quorum must be 1-100");
         uint old = quorum_percent;
@@ -266,9 +240,6 @@ contract Dao {
         emit QuorumUpdated(old, _newQuorum);
     }
 
-    /**
-     * @notice Transfer DAO contract ownership
-     */
     function transferOwnership(address _newOwner) external onlyOwner {
         require(_newOwner != address(0), "Invalid owner");
         address old = owner;
